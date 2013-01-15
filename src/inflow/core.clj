@@ -31,6 +31,21 @@
    [clojure.tools.namespace.dependency :as dep]))
 
 ;; -----------------------------------------------------------------------------
+;;  Map flattening and raising
+(defn flat-map
+  "Return a flat map representation of a nested map.  Nested keys return as vectors."
+  ([m] (flat-map {} [] m))
+  ([a ks m]
+     (if (map? m)
+       (reduce into (map (fn [[k v]] (flat-map a (conj ks k) v)) (seq m)))
+       (assoc a ks m))))
+
+(defn nested-map
+  "Return a nested map representation of a flat map."
+  [m]
+  (reduce (fn [m [ks v]] (assoc-in m ks v)) {} m))
+
+;; -----------------------------------------------------------------------------
 ;; ## Keys
 
 ;; The flow representation is flat these are the names we use to unmap the nested
