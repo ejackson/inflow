@@ -32,116 +32,18 @@
 
 ;; -----------------------------------------------------------------------------
 ;;  Map flattening and raising
-(defn flat-map
+(defn ->flow
   "Return a flat map representation of a nested map.  Nested keys return as vectors."
-  ([m] (flat-map {} [] m))
-  ([a ks m]
-     (if (map? m)
-       (reduce into (map (fn [[k v]] (flat-map a (conj ks k) v)) (seq m)))
-       (assoc a ks m))))
-
-(defn nested-map
-  "Return a nested map representation of a flat map."
-  [m]
-  (reduce (fn [m [ks v]] (assoc-in m ks v)) {} m))
-
-;; -----------------------------------------------------------------------------
-;; ## Keys
-
-;; The flow representation is flat these are the names we use to unmap the nested
-;; inference-map to the flow-map node names
-;;
-(defn k-cat [s1 s2]
-  (keyword (str s1 (name s2))))
-
-(defn prior-key [id]
-  (k-cat "prior-" id))
-
-(defn likelihood-fn-key [id]
-  (k-cat "likelihood-fn-" id))
-
-(defn likelihood-key [id]
-  (k-cat "likelihood-" id))
-
-(defn unnorm-posterior-key [id]
-  (k-cat "unnorm-posterior-" id))
-
-(defn posterior-key [id]
-  (k-cat "posterior-" id))
-
-;;--------------------------------------------------------------------
-;; ## Conversions
-
-;; ### flow->
-;; Convert from a flow to an inference map.  Its a bit ugly as the ids
-;; are distributed amoung the keys, so we have to munge it a lot.
-(defn- inf-keys [id]
-  {(prior-key id)            :prior
-   (likelihood-fn-key id)    :likelihood-fn
-   (likelihood-key id)       :likelihood
-   (unnorm-posterior-key id) :unnorm-posterior
-   (posterior-key id)        :posterior})
-
-;; Normalise the names of all the hypotheses coming out of the complete graph
-(defn- extract-hypotheses-keys [id inf-flow]
-  (let [key-xf (inf-keys id)]
-    {id (-> inf-flow
-            (select-keys (keys key-xf))
-            (rename-keys key-xf))}))
-
-;; A couple of helper fn to extract keys from a flow.  The game is to know
-;; that every hypothesis must have a prior.  So find all the keys in the flow
-;; that relate to priors and pull off that section of the name which is the
-;; id.  Its all rather ugly.
-;;
-(defn- id-from-prior-key [k]
-  (second (split (str (name k)) #"prior-")))
-
-(defn- hyp-ids
-  [flow]
-  (->> (keys flow)
-       (map id-from-prior-key)
-       (filter identity)
-       (map keyword)))
+  ([m] (->flow {} [] m))
+  ([a [f s :as ks] m]
+       (if (map? m)
+         (reduce into {} (map (fn [[k v]] (->flow a (conj ks k) v)) (seq m)))
+         (assoc a (if s ks f) m))))
 
 (defn flow->
-  "Takes a flow and turns it into an inference map"
-  [{:keys [norm data] :as inf}]
-  {:norm norm
-   :data data
-   :hypotheses
-   (reduce
-    (fn [m id]
-      (merge m (extract-hypotheses-keys id inf)))
-    {}
-    (hyp-ids inf))})
-
-;; -----------------------------------------------------------------------------
-;; ### ->flow
-
-;;  Convert an inference map to a flow map.  Note that there is
-;;  no metadata here, as the keys cannot necessarily support it.
-;;  If you want that, you need to create a generative flow.
-;;
-(defn- flatten-hyp
-  "Flatten an individual hypothesis to its flow representation."
-  [id hypothesis]
-  (reduce
-   (fn [m [f-k i-k]]
-     (if (i-k hypothesis)
-       (assoc m f-k (i-k hypothesis))
-       m))
-   {}
-   (inf-keys id)))
-
-(defn ->flow
-  "Turn an inference into a flow.  If data and norm are given they are included."
-  [{:keys [hypotheses] :as inf}]
-  (merge
-   (select-keys inf [:data :norm])
-   (reduce (fn [f [id h]] (merge f (flatten-hyp id h)))
-           (flow/flow)
-           hypotheses)))
+  "Return a nested map representation of a flat map."
+  [m]
+  (reduce (fn [m [ks v]] (assoc-in m (if (vector? ks) ks [ks]) v)) {} m))
 
 ;; -----------------------------------------------------------------------------
 ;; ## Generative Flow Creation
@@ -161,19 +63,19 @@
 (defn- likelihood-fn-flow-fn [likelihood-fn] (flow/flow-fn [] likelihood-fn))
 
 (defn- likelihood-flow-fn [id]
-  (flow/with-inputs [(likelihood-fn-key id) :data]
+  (flow/with-inputs [[:h id :likelihood-fn] :data]
     (fn [{data :data :as r}]
-      (((likelihood-fn-key id) r) data))))
+      ((r [:h id :likelihood-fn]) data))))
 
 (defn- unnorm-posterior-flow-fn [id]
-  (flow/with-inputs [(likelihood-key id) (prior-key id)]
+  (flow/with-inputs [[:h id :likelihood] [:h id :prior]]
     (fn [r]
-      (* ((likelihood-key id) r) ((prior-key id) r)))))
+      (* (r [:h id :likelihood]) (r [:h id :prior])))))
 
 (defn- posterior-flow-fn [id]
-  (flow/with-inputs [(unnorm-posterior-key id) :norm]
+  (flow/with-inputs [[:h id :unnorm-posterior] :norm]
     (fn [r]
-      (/ ((unnorm-posterior-key id) r) (:norm r)))))
+      (/ (r [:h id :unnorm-posterior]) (:norm r)))))
 
 ;; ### Composition
 ;; Create a Flow that combines all the flow functions.
@@ -182,17 +84,17 @@
   "Add the flow function of a single hypothesis to the flow"
   [flow [id {:keys [likelihood-fn prior] :as hypothesis}]]
   (-> flow
-      (assoc (prior-key id)            (prior-flow-fn prior))
-      (assoc (likelihood-fn-key id)    (likelihood-fn-flow-fn likelihood-fn))
-      (assoc (likelihood-key id)       (likelihood-flow-fn id))
-      (assoc (unnorm-posterior-key id) (unnorm-posterior-flow-fn id))
-      (assoc (posterior-key id)        (posterior-flow-fn id))))
+      (assoc [:h id :prior]            (prior-flow-fn prior))
+      (assoc [:h id :likelihood-fn]    (likelihood-fn-flow-fn likelihood-fn))
+      (assoc [:h id :likelihood]       (likelihood-flow-fn id))
+      (assoc [:h id :unnorm-posterior] (unnorm-posterior-flow-fn id))
+      (assoc [:h id :posterior]        (posterior-flow-fn id))))
 
 ;; This is a slightly different node as it has inter-hypotheses dependencies.
 (defn- normalise-flow
   "Add the normalisation node, dep'd on all the unnorm-posterior nodes"
   [flow hypotheses]
-  (let [post-nodes (mapv unnorm-posterior-key (keys hypotheses))]
+  (let [post-nodes (map (fn [id] [:h id :unnorm-posterior]) (keys hypotheses))]
     (assoc flow :norm (flow/with-inputs post-nodes
                         (fn [r] (apply + (vals (select-keys r post-nodes))))))))
 
@@ -235,7 +137,7 @@
    the nodes in the new inference that differ from the old, and their dependents.
    Return a flow with these dependents removed.  This can be used as the 'given'
    inference in infer as the remaining graph is consistent."
-  [{:keys [hypotheses] :as new-inf} old-inf]
+  [{hypotheses :h :as new-inf} old-inf]
   (let [old-flow       (->flow old-inf)
         new-flow       (->flow new-inf)
         new-gen-flow   (generative-flow hypotheses)
@@ -243,9 +145,9 @@
         tainted-nodes  (taint-nodes new-gen-flow changed-nodes)]
     (apply dissoc new-flow tainted-nodes)))
 
+
 ;; -----------------------------------------------------------------
 ;; ## Inference
-
 ;; The main deal.
 (defn infer
   "Accepts an partial inference map, and returns a full inference map containing
@@ -253,6 +155,6 @@
    a previous inference, then infer will only do an update calculation for those
    nodes that need to be updated on account of changes."
   ([new-inference] (infer new-inference {}))
-  ([{:keys [hypotheses] :as new-inference} given-inference]
+  ([{hypotheses :h :as new-inference} given-inference]
      (flow->
       (flow/run (generative-flow hypotheses) (untaint new-inference given-inference)))))

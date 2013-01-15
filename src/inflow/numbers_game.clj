@@ -134,25 +134,25 @@
 
 ;; Start by creating an inference map, stating what we know.  That is
 ;; our hypotheses and some data.
-(def partial-inference {:hypotheses (hypotheses-set)
-                        :data       [16]})
+(def partial-inference {:h    (hypotheses-set)
+                        :data  [16]})
 
 ;; Feed that into the inference function, which returns the completed
 ;; inference map.
 (def inference (inf/infer partial-inference))
 
 ;; Use Incanter to have a look at the likelihoods and posteriors.
-(def i (:hypotheses inference))
+(def i (:h inference))
 (view (bar-chart (keys i) (map :likelihood (vals i)) :vertical false))
 (view (bar-chart (keys i) (map :posterior (vals i))  :vertical false))
 
 ;; Now update the inference to reflect total disbelief in the :pow.4 hypothesis
 ;; and rerun.  Note that the inference will only update the nodes affected by this
 ;; change.  Its an example of inference-as-a-value.
-(def another-inference (inf/infer (assoc-in inference [:hypotheses :pow.4 :prior] 0) inference))
+(def another-inference (inf/infer (assoc-in inference [:h :pow.4 :prior] 0) inference))
 
 ;; And take a look at this.
-(def i (:hypotheses another-inference))
+(def i (:h another-inference))
 (view (bar-chart (keys i) (map :likelihood (vals i)) :vertical false))
 (view (bar-chart (keys i) (map :posterior (vals i))  :vertical false))
 
@@ -160,4 +160,4 @@
 ;; You see is at the terminal with "dot -Tpng -o flow.png flow.dot" and
 ;; then "eog flow.png" or the equivalent
 
-(flow/write-dotfile (construct-inference q) "flow.dot")
+#_(com.stuartsierra.flow/write-dotfile  "flow.dot")
