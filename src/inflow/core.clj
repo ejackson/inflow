@@ -4,7 +4,7 @@
 ;; There are two main structures, and inference- and a flow-map.
 ;; An inference is a map with a key signature like
 ;;
-;;     {:norm,
+;;     {:post-norm,
 ;;      :data,
 ;;      :hypotheses {:h-id {:prior, :likelihood-fn,
 ;;                          :likelihood, :unnorm-posterior, :posterior},
@@ -58,7 +58,12 @@
 ;;
 ;; Notice that the dependency graph is described *only* here
 ;;
-(defn- prior-flow-fn [prior] (flow/flow-fn [] prior))
+(defn- unnorm-prior-flow-fn [prior] (flow/flow-fn [] prior))
+
+(defn- prior-flow-fn [id]
+  (flow/with-inputs [[:h id :unnorm-prior] :prior-norm]
+    (fn [r]
+      (/ (r [:h id :unnorm-prior]) (:prior-norm r)))))
 
 (defn- likelihood-fn-flow-fn [likelihood-fn] (flow/flow-fn [] likelihood-fn))
 
@@ -73,9 +78,9 @@
       (* (r [:h id :likelihood]) (r [:h id :prior])))))
 
 (defn- posterior-flow-fn [id]
-  (flow/with-inputs [[:h id :unnorm-posterior] :norm]
+  (flow/with-inputs [[:h id :unnorm-posterior] :post-norm]
     (fn [r]
-      (/ (r [:h id :unnorm-posterior]) (:norm r)))))
+      (/ (r [:h id :unnorm-posterior]) (:post-norm r)))))
 
 ;; ### Composition
 ;; Create a Flow that combines all the flow functions.
@@ -84,7 +89,8 @@
   "Add the flow function of a single hypothesis to the flow"
   [flow [id {:keys [likelihood-fn prior] :as hypothesis}]]
   (-> flow
-      (assoc [:h id :prior]            (prior-flow-fn prior))
+      (assoc [:h id :unnorm-prior]     (unnorm-prior-flow-fn prior))
+      (assoc [:h id :prior]            (prior-flow-fn id))
       (assoc [:h id :likelihood-fn]    (likelihood-fn-flow-fn likelihood-fn))
       (assoc [:h id :likelihood]       (likelihood-flow-fn id))
       (assoc [:h id :unnorm-posterior] (unnorm-posterior-flow-fn id))
@@ -94,9 +100,13 @@
 (defn- normalise-flow
   "Add the normalisation node, dep'd on all the unnorm-posterior nodes"
   [flow hypotheses]
-  (let [post-nodes (map (fn [id] [:h id :unnorm-posterior]) (keys hypotheses))]
-    (assoc flow :norm (flow/with-inputs post-nodes
-                        (fn [r] (apply + (vals (select-keys r post-nodes))))))))
+  (let [post-nodes  (map (fn [id] [:h id :unnorm-posterior]) (keys hypotheses))
+        prior-nodes (map (fn [id] [:h id :unnorm-prior])     (keys hypotheses))]
+    (-> flow
+        (assoc :prior-norm (flow/with-inputs prior-nodes
+                             (fn [r] (apply + (vals (select-keys r prior-nodes))))))
+        (assoc :post-norm (flow/with-inputs post-nodes
+                            (fn [r] (apply + (vals (select-keys r post-nodes)))))))))
 
 (defn generative-flow
   "Given a set of hypotheses, return a flow that can generate all the outputs"
